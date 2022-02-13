@@ -1,12 +1,26 @@
+require("dotenv").config();
 const express = require("express");
 const morgan = require("morgan");
 const cors = require("cors");
+const Person = require("./models/person");
 
 morgan.token("body", function getId(req) {
   if (req.method === "POST") {
     return JSON.stringify(req.body);
   }
 });
+
+const errorHandler = (error, request, response, next) => {
+  console.error(error.message);
+
+  if (error.name === "CastError") {
+    return response.status(400).send({ error: "malformatted id" });
+  } else if (error.name === "ValidationError") {
+    return response.status(400).json({ error: error.message });
+  }
+
+  next(error);
+};
 
 const app = express();
 app.use(express.json());
@@ -42,48 +56,72 @@ app.get("/", (req, res) => {
 });
 
 app.get("/info", (req, res) => {
-  res.write(`<p>Phonebook has info for ${persons.length} people</p>`);
-  res.end(`<p>${new Date().toUTCString()}</p>`);
+  Person.count({}).then((count) => {
+    res.write(`<p>Phonebook has info for ${count} people</p>`);
+    res.end(`<p>${new Date().toUTCString()}</p>`);
+  });
 });
 
-app.get("/api/persons", (req, res) => {
-  res.json(persons);
+app.get("/api/persons", (req, res, next) => {
+  Person.find({})
+    .then((response) => {
+      res.json(response);
+    })
+    .catch((error) => next(error));
 });
 
-app.post("/api/persons", (req, res) => {
-  const data = req.body;
-  if (!data.name || !data.number) {
-    return res.status(422).json({ error: "missing name or number" });
-  }
-  if (persons.some((person) => person.name === data.name)) {
-    return res.status(409).json({ error: `entry with 'name: ${data.name}' already exists` });
-  }
-  const newPerson = {
-    id: Math.floor(Math.random() * 10000),
-    name: data.name,
-    number: data.number,
-  };
-  persons = persons.concat(newPerson);
-  res.status(200).json(newPerson);
+app.post("/api/persons", (req, res, next) => {
+  const { name, number } = req.body;
+
+  Person.findOne({ name: name }).then((person) => {
+    if (person) {
+      res.status(409).json({ error: `User with name ${name} already exists` });
+    } else {
+      const newPerson = Person({ name, number });
+
+      newPerson
+        .save()
+        .then((result) => {
+          res.status(200).json(newPerson);
+        })
+        .catch((error) => next(error));
+    }
+  });
 });
 
-app.get("/api/persons/:id", (req, res) => {
-  const id = Number(req.params.id);
-  const person = persons.find((person) => person.id === id);
-  if (person) {
-    res.json(person);
-  } else {
-    res.status(404).end();
-  }
+app.get("/api/persons/:id", (req, res, next) => {
+  Person.findById(req.params.id)
+    .then((person) => {
+      if (person) {
+        res.json(person);
+      } else {
+        res.status(404).end();
+      }
+    })
+    .catch((error) => next(error));
 });
 
-app.delete("/api/persons/:id", (req, res) => {
-  const id = Number(req.params.id);
-  persons = persons.filter((person) => person.id !== id);
-  res.status(204).end();
+app.put("/api/persons/:id", (req, res, next) => {
+  const { name, number } = req.body;
+
+  Person.findByIdAndUpdate(req.params.id, { name, number }, { new: true, runValidators: true, context: "query" })
+    .then((updatedPerson) => {
+      res.json(updatedPerson);
+    })
+    .catch((error) => next(error));
 });
 
-const PORT = process.env.PORT || 3001;
+app.delete("/api/persons/:id", (req, res, next) => {
+  Person.findByIdAndDelete(req.params.id)
+    .then((response) => {
+      res.status(204).end();
+    })
+    .catch((error) => next(error));
+});
+
+app.use(errorHandler); //Has to be last
+
+const PORT = process.env.PORT;
 app.listen(PORT, () => {
   console.log(`Starting server on port: ${PORT}`);
 });
